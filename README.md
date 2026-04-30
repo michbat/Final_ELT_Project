@@ -2,11 +2,13 @@
 *Data Engineering – Travail de fin de formation*
 
 
+
 ## 1. Contexte et objectif
 
 Le projet consiste à concevoir pipeline ELT complet à partir de zéro, sans recours à des services cloud. L’objectif est de démontrer la maîtrise des briques open source essentielles du data engineering : orchestration, transformation, persistance et visualisation.
 
 L’ensemble des outils sera conteneurisé avec Docker et orchestré localement.
+
 
 
 ## 2. Sources de données
@@ -18,7 +20,8 @@ L’ensemble des outils sera conteneurisé avec Docker et orchestré localement.
 
 Les jeux de données CSV proviennent du dépôt GitHub de Mikail Altundas, formateur en Data.
 
----
+
+
 
 ## 3. Architecture technique envisagée
 
@@ -32,6 +35,7 @@ Composants principaux :
 L’ensemble sera monté from scratch via Docker Compose.
 
 
+
 ## 4. Flux de traitement
 
 1. Récupération orchestrée des fichiers CSV  
@@ -39,6 +43,7 @@ L’ensemble sera monté from scratch via Docker Compose.
 3. Chargement dans PostgreSQL (3 couches médaillon: bronze, silver, gold)  
 4. Transformations Python pour construire une vue analytique  
 5. Connexion de Superset à PostgreSQL pour le reporting
+
 
 
 ## 5. Livrables attendus
