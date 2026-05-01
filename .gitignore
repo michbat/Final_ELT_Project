@@ -3,3 +3,5 @@
 
 *data.py
 *data.ipynb
+*.ipynb
+.gitignore
