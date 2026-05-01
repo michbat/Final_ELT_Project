@@ -1,0 +1,22 @@
+services:
+  postgres-db: 
+    image: postgres:latest  # Utilise la dernière version de PostgreSQL
+    container_name: windturbinepower # Nom du conteneur
+    restart: "no" # Ne redémarre pas le conteneur automatiquement
+    environment:  # Variables d'environnement pour la configuration de PostgreSQL
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432" # Mapping du port 5432 du conteneur vers le port 5433 de l'hôte
+    volumes:
+      - windturbinepower-data:/var/lib/postgresql # Chemin vers le volume pgdata dans lequel vont être persisté nos données
+    networks:
+      - windturbinepower-network
+
+networks:
+  windturbinepower-network:
+    name: windturbinepower-network # force le nom exact 
+    driver: bridge
+volumes:
+  windturbinepower-data:

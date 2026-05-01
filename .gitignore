@@ -1,4 +1,5 @@
 # environment variables
 .env
 
-test.py
+*data.py
+*data.ipynb

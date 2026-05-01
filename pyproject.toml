@@ -5,8 +5,19 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "click>=4.1,<8.1.8",
     "ipykernel>=7.2.0",
     "jupyter>=1.1.1",
+    "numpy>=2.4.4",
+    "pandas>=3.0.2",
+    "psycopg>=3.3.3",
     "pyspark>=4.1.1",
     "python-dotenv>=1.2.2",
+    "sqlalchemy>=2.0.49",
+    "tqdm>=4.67.3",
+]
+
+[dependency-groups]
+dev = [
+    "pgcli >= 4.4.0"
 ]
