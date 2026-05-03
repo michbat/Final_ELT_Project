@@ -13,6 +13,20 @@ services:
       - windturbinepower-data:/var/lib/postgresql # Chemin vers le volume pgdata dans lequel vont être persisté nos données
     networks:
       - windturbinepower-network
+  bronze:  # Service d'ingestion (extraction et chargement dans la couche Bronze)
+    image: bronze
+    restart: "no"
+    depends_on:
+      - postgres-db
+    env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
+      - etl.env
+    environment:
+      # Date d'ingestion (peut être surchargée en ligne de commande)
+      INGEST_JOUR: ${INGEST_JOUR:-15}
+      INGEST_MOIS: ${INGEST_MOIS:-6}
+      INGEST_ANNEE: ${INGEST_ANNEE:-2024}
+    networks:
+      - windturbinepower-network
 
 networks:
   windturbinepower-network:

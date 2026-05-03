@@ -1,7 +1,16 @@
 # environment variables
 .env
+*.env
 
 *data.py
 *data.ipynb
 *.ipynb
 .gitignore
+*.gitignore
+
+*.txt
+
+docker-compose.yaml
+docker-compose.*
+Dockerfile.*
+*.sh
