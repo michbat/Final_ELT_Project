@@ -27,6 +27,24 @@ services:
       INGEST_ANNEE: ${INGEST_ANNEE:-2024}
     networks:
       - windturbinepower-network
+  silver:  # Service de transformation (lecture de la couche Bronze, transformation et chargement dans la couche Silver)
+    image: silver
+    restart: "no"
+    depends_on:
+      - postgres-db
+    env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
+      - etl.env
+    networks:
+      - windturbinepower-network
+  gold:  # Service de transformation (lecture de la couche Silver, transformation et chargement dans la couche Gold)
+    image: gold
+    restart: "no"
+    depends_on:
+      - postgres-db
+    env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
+      - etl.env
+    networks:
+      - windturbinepower-network
 
 networks:
   windturbinepower-network:

@@ -1,10 +1,8 @@
 # environment variables
 .env
 *.env
+.venv
 
-*data.py
-*data.ipynb
-*.ipynb
 .gitignore
 *.gitignore
 
@@ -12,5 +10,10 @@
 
 docker-compose.yaml
 docker-compose.*
-Dockerfile.*
+Dockerfile.bronze
+Dockerfile.silver
+Dockerfile.gold
 *.sh
+*.yaml
+*.yml
+*.md
