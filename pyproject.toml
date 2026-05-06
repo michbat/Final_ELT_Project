@@ -17,6 +17,7 @@ dependencies = [
     "pyspark>=4.1.1",
     "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.49",
+    "statsmodels>=0.14.6",
     "tqdm>=4.67.3",
 ]
 
