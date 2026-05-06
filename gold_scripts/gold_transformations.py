@@ -242,9 +242,9 @@ def create_gold_schema_and_tables() -> None:
                 CREATE TABLE IF NOT EXISTS gold.turbine_dim (
                     turbine_id BIGINT PRIMARY KEY,
                     turbine_name VARCHAR(100) NOT NULL,
-                    capacity DOUBLE PRECISION,
-                    latitude DOUBLE PRECISION,
-                    longitude DOUBLE PRECISION,
+                    capacity INTEGER,
+                    latitude NUMERIC(9,6),
+                    longitude NUMERIC(9,6),
                     region VARCHAR(50),
                     region_name VARCHAR(200)
                 );
@@ -265,8 +265,8 @@ def create_gold_schema_and_tables() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS gold.location_dim (
                     location_id BIGINT PRIMARY KEY,
-                    latitude DOUBLE PRECISION,
-                    longitude DOUBLE PRECISION,
+                    latitude NUMERIC(9,6),
+                    longitude NUMERIC(9,6),
                     region VARCHAR(50),
                     region_name VARCHAR(200)
                 );
@@ -281,8 +281,8 @@ def create_gold_schema_and_tables() -> None:
                     time_id TIME NOT NULL,
                     turbine_id BIGINT NOT NULL,
                     status_id BIGINT NOT NULL,
-                    energy_produced DOUBLE PRECISION,
-                    wind_speed_100m DOUBLE PRECISION,
+                    energy_produced NUMERIC(12,2),
+                    wind_speed_100m NUMERIC(6,2),
                     wind_direction VARCHAR(10),
                     FOREIGN KEY (date_id) REFERENCES gold.date_dim(date_id),
                     FOREIGN KEY (time_id) REFERENCES gold.time_dim(time_id),
@@ -299,35 +299,17 @@ def create_gold_schema_and_tables() -> None:
                     date_id DATE NOT NULL,
                     time_id TIME NOT NULL,
                     location_id BIGINT NOT NULL,
-                    temperature_2m DOUBLE PRECISION,
-                    pressure_msl DOUBLE PRECISION,
-                    precipitation DOUBLE PRECISION,
-                    wind_gust_10m DOUBLE PRECISION,
-                    wind_speed_100m DOUBLE PRECISION,
+                    temperature_2m NUMERIC(5,2),
+                    pressure_msl NUMERIC(7,2),
+                    precipitation NUMERIC(8,2),
+                    wind_gust_10m NUMERIC(6,2),
+                    wind_speed_100m NUMERIC(6,2),
                     FOREIGN KEY (date_id) REFERENCES gold.date_dim(date_id),
                     FOREIGN KEY (time_id) REFERENCES gold.time_dim(time_id),
                     FOREIGN KEY (location_id) REFERENCES gold.location_dim(location_id)
                 );
                 """
             )
-
-            # Harmonise les types des tables deja existantes pour rester coherents avec silver/bronze.
-            cur.execute("ALTER TABLE gold.turbine_dim ALTER COLUMN capacity TYPE DOUBLE PRECISION USING capacity::double precision;")
-            cur.execute("ALTER TABLE gold.turbine_dim ALTER COLUMN latitude TYPE DOUBLE PRECISION USING latitude::double precision;")
-            cur.execute("ALTER TABLE gold.turbine_dim ALTER COLUMN longitude TYPE DOUBLE PRECISION USING longitude::double precision;")
-
-            cur.execute("ALTER TABLE gold.location_dim ALTER COLUMN latitude TYPE DOUBLE PRECISION USING latitude::double precision;")
-            cur.execute("ALTER TABLE gold.location_dim ALTER COLUMN longitude TYPE DOUBLE PRECISION USING longitude::double precision;")
-
-            cur.execute("ALTER TABLE gold.fact_energy_production ALTER COLUMN energy_produced TYPE DOUBLE PRECISION USING energy_produced::double precision;")
-            cur.execute("ALTER TABLE gold.fact_energy_production ALTER COLUMN wind_speed_100m TYPE DOUBLE PRECISION USING wind_speed_100m::double precision;")
-
-            cur.execute("ALTER TABLE gold.fact_weather_conditions ALTER COLUMN temperature_2m TYPE DOUBLE PRECISION USING temperature_2m::double precision;")
-            cur.execute("ALTER TABLE gold.fact_weather_conditions ALTER COLUMN pressure_msl TYPE DOUBLE PRECISION USING pressure_msl::double precision;")
-            cur.execute("ALTER TABLE gold.fact_weather_conditions ALTER COLUMN precipitation TYPE DOUBLE PRECISION USING precipitation::double precision;")
-            cur.execute("ALTER TABLE gold.fact_weather_conditions ALTER COLUMN wind_gust_10m TYPE DOUBLE PRECISION USING wind_gust_10m::double precision;")
-            cur.execute("ALTER TABLE gold.fact_weather_conditions ALTER COLUMN wind_speed_100m TYPE DOUBLE PRECISION USING wind_speed_100m::double precision;")
-
     logger.info("Schema et tables gold pretes")
 
 
