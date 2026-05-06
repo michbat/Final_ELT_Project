@@ -36,9 +36,9 @@ erDiagram
     turbine_dim {
         BIGINT turbine_id PK
         VARCHAR turbine_name
-        NUMERIC capacity
-        NUMERIC latitude
-        NUMERIC longitude
+        INTEGER capacity
+        DOUBLE latitude
+        DOUBLE longitude
         VARCHAR region
         VARCHAR region_name
     }
@@ -51,8 +51,8 @@ erDiagram
 
     location_dim {
         BIGINT location_id PK
-        NUMERIC latitude
-        NUMERIC longitude
+        DOUBLE latitude
+        DOUBLE longitude
         VARCHAR region
         VARCHAR region_name
     }
@@ -63,8 +63,8 @@ erDiagram
         TIME time_id FK
         BIGINT turbine_id FK
         BIGINT status_id FK
-        NUMERIC energy_produced
-        NUMERIC wind_speed_100m
+        DOUBLE energy_produced
+        DOUBLE wind_speed_100m
         VARCHAR wind_direction
     }
 
@@ -73,11 +73,11 @@ erDiagram
         DATE date_id FK
         TIME time_id FK
         BIGINT location_id FK
-        NUMERIC temperature_2m
-        NUMERIC pressure_msl
-        NUMERIC precipitation
-        NUMERIC wind_gust_10m
-        NUMERIC wind_speed_100m
+        DOUBLE temperature_2m
+        DOUBLE pressure_msl
+        DOUBLE precipitation
+        DOUBLE wind_gust_10m
+        DOUBLE wind_speed_100m
     }
 
 
@@ -126,7 +126,7 @@ erDiagram
 - Chaque enregistrement de fait référence exactement une valeur par dimension (via FK)
 - Les dimensions sont partagées entre les tables de faits (conformed dimensions)
 
-## Stratégie de Clés
+## Clés
 
 - **Clés naturelles** : date_dim (date), time_dim (heure)
 - **Clés stables par hash** : turbine_dim, operational_status_dim, location_dim
