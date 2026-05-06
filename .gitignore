@@ -8,12 +8,4 @@
 
 *.txt
 
-docker-compose.yaml
-docker-compose.*
-Dockerfile.bronze
-Dockerfile.silver
-Dockerfile.gold
-*.sh
-*.yaml
-*.yml
 *.md
