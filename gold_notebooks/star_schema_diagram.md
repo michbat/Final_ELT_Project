@@ -37,8 +37,8 @@ erDiagram
         BIGINT turbine_id PK
         VARCHAR turbine_name
         INTEGER capacity
-        DOUBLE latitude
-        DOUBLE longitude
+        NUMERIC latitude
+        NUMERIC longitude
         VARCHAR region
         VARCHAR region_name
     }
@@ -51,8 +51,8 @@ erDiagram
 
     location_dim {
         BIGINT location_id PK
-        DOUBLE latitude
-        DOUBLE longitude
+        NUMERIC latitude
+        NUMERIC longitude
         VARCHAR region
         VARCHAR region_name
     }
@@ -63,8 +63,8 @@ erDiagram
         TIME time_id FK
         BIGINT turbine_id FK
         BIGINT status_id FK
-        DOUBLE energy_produced
-        DOUBLE wind_speed_100m
+        NUMERIC energy_produced
+        NUMERIC wind_speed_100m
         VARCHAR wind_direction
     }
 
@@ -73,11 +73,11 @@ erDiagram
         DATE date_id FK
         TIME time_id FK
         BIGINT location_id FK
-        DOUBLE temperature_2m
-        DOUBLE pressure_msl
-        DOUBLE precipitation
-        DOUBLE wind_gust_10m
-        DOUBLE wind_speed_100m
+        NUMERIC temperature_2m
+        NUMERIC pressure_msl
+        NUMERIC precipitation
+        NUMERIC wind_gust_10m
+        NUMERIC wind_speed_100m
     }
 
 
