@@ -25,4 +25,4 @@ docker compose up silver
 echo "[3/3] Lancement de gold..."
 docker compose up gold
 
-echo "Pipeline termine avec succes."
+echo "Pipeline terminé avec succès."

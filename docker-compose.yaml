@@ -1,5 +1,5 @@
 services:
-  postgres-db: 
+  winturbinepower-db: 
     image: postgres:latest  # Utilise la dernière version de PostgreSQL
     container_name: windturbinepower # Nom du conteneur
     restart: "no" # Ne redémarre pas le conteneur automatiquement
@@ -20,7 +20,7 @@ services:
     image: bronze
     restart: "no"
     depends_on:
-      - postgres-db
+      - winturbinepower-db
     env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
       - etl.env
     environment:
@@ -34,7 +34,7 @@ services:
     image: silver
     restart: "no"
     depends_on:
-      - postgres-db
+      - winturbinepower-db
     env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
       - etl.env
     networks:
@@ -43,7 +43,7 @@ services:
     image: gold
     restart: "no"
     depends_on:
-      - postgres-db
+      - winturbinepower-db
     env_file: # Utilisation d'un fichier d'environnement pour les variables sensibles
       - etl.env
     networks:
