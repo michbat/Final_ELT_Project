@@ -438,7 +438,7 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
     fact_energy_sql: str = """
         INSERT INTO gold.fact_energy_production
         (fact_production_id, date_id, time_id, turbine_id, status_id,
-         energy_produced, wind_speed_100m, wind_direction)
+        energy_produced, wind_speed_100m, wind_direction)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (fact_production_id) DO UPDATE SET
             date_id = EXCLUDED.date_id,
@@ -452,7 +452,7 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
     fact_weather_sql: str = """
         INSERT INTO gold.fact_weather_conditions
         (fact_weather_id, date_id, time_id, location_id,
-         temperature_2m, pressure_msl, precipitation, wind_gust_10m, wind_speed_100m)
+        temperature_2m, pressure_msl, precipitation, wind_gust_10m, wind_speed_100m)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (fact_weather_id) DO UPDATE SET
             date_id = EXCLUDED.date_id,
