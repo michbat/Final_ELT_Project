@@ -16,6 +16,7 @@ dependencies = [
     "psycopg>=3.3.3",
     "pyspark>=4.1.1",
     "python-dotenv>=1.2.2",
+    "requests>=2.33.1",
     "sqlalchemy>=2.0.49",
     "statsmodels>=0.14.6",
     "tqdm>=4.67.3",
@@ -23,5 +24,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pgcli >= 4.4.0"
+    "pgcli >= 4.4.0",
+    "apache-airflow>=3.0",
+    "python-dotenv>=1.0",
+    "pendulum>=3.0",
 ]

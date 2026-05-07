@@ -9,13 +9,13 @@ services:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
-
     ports:
       - "5433:5432" # Mapping du port 5432 du conteneur vers le port 5433 de l'hôte
     volumes:
       - windturbinepower-data:/var/lib/postgresql # Chemin vers le volume pgdata dans lequel vont être persisté nos données
     networks:
       - windturbinepower-network
+
   bronze:  # Service d'ingestion (extraction et chargement dans la couche Bronze)
     image: bronze
     restart: "no"
@@ -30,6 +30,57 @@ services:
       INGEST_ANNEE: ${INGEST_ANNEE:-2024}
     networks:
       - windturbinepower-network
+
+  airflow-db:
+    image: postgres:latest
+    container_name: airflow_db
+    restart: "no"
+    environment:
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow}
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    ports:
+      - "5434:5432" # Mapping du port 5432 du conteneur vers le port 5434 de l'hôte
+    volumes:
+      - airflow-db-data:/var/lib/postgresql
+    networks:
+      - windturbinepower-network
+
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    image: finaleltproject-airflow:local
+    container_name: airflow
+    restart: "no"
+    command: standalone
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    ports:
+      - "8085:8080"
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-db:5432/${AIRFLOW_DB_NAME:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:Admin"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./:/opt/airflow/project
+      - ./airflow/simple_auth_manager_passwords.json:/opt/airflow/simple_auth_manager_passwords.json
+    networks:
+      - windturbinepower-network
+
   silver:  # Service de transformation (lecture de la couche Bronze, transformation et chargement dans la couche Silver)
     image: silver
     restart: "no"
@@ -48,10 +99,15 @@ services:
       - etl.env
     networks:
       - windturbinepower-network
+  
 
 networks:
   windturbinepower-network:
     name: windturbinepower-network # force le nom exact 
     driver: bridge
+
 volumes:
   windturbinepower-data:
+  airflow-db-data:
+
+

@@ -1,0 +1,28 @@
+FROM apache/airflow:3.2.1-python3.13
+
+USER root
+
+# 1. Copier le binaire uv depuis l'image officielle
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# 2. Dépendances système (Java)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+# Copier les fichiers de dépendances
+COPY pyproject.toml uv.lock ./
+
+# Exporter le lockfile en requirements.txt (sans les dépendances dev)
+RUN uv export --locked --no-dev -o /tmp/requirements.txt
+
+# Repasser sur l'utilisateur airflow pour installer dans son environnement Python
+# (/home/airflow/.local/lib/python3.13/) — là où Airflow cherche ses packages
+USER airflow
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+
+
