@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import psycopg
+import pandas as pd
 from typing import Final
 from dotenv import load_dotenv
 from pyspark.sql import DataFrame, SparkSession
@@ -152,71 +153,86 @@ def create_silver_table() -> None:
 				logger.info("La clé primaire existe déjà")
 
 
-def get_existing_business_keys(spark: SparkSession) -> DataFrame:
-	"""Récupère les clés primaires déjà présentes dans la table Silver."""
-	existing_df: DataFrame = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.windpowerturbine_cleaned",
-		properties=JDBC_PROPS,
-	)
-	return existing_df.select("production_id")
-
-
-def filter_new_rows(transformed_df: DataFrame, spark: SparkSession) -> DataFrame:
-	"""Retire les lignes déjà chargées et dédoublonne le lot courant sur production_id."""
-	logger.info("Filtrage des doublons sur la clé primaire production_id")
-
-	try:
-		existing_keys: DataFrame = get_existing_business_keys(spark)
-		filtered_df: DataFrame = transformed_df.join(
-			existing_keys,
-			on=["production_id"],
-			how="left_anti",
-		)
-	except Exception as error:
-		logger.warning(
-			f"Lecture de la table Silver impossible ou table vide, insertion complète du lot: {error}"
-		)
-		filtered_df = transformed_df
-
-	# Sécurité supplémentaire: dédoublonnage interne du lot sur production_id.
-	return filtered_df.dropDuplicates(["production_id"])
-
-
-def write_silver_data(filtered_df: DataFrame) -> int:
-	"""Trie puis insère les nouvelles lignes dans la table Silver."""
-	row_count: int = filtered_df.count()
-
+def upsert_silver_data(transformed_df: DataFrame) -> None:
+	"""Insère ou met à jour les données Silver via UPSERT PostgreSQL."""
+	row_count: int = transformed_df.count()
 	if row_count == 0:
-		logger.info("Aucune nouvelle donnée à insérer")
-		return 0
+		logger.info("Aucune donnée à traiter")
+		return # On sort de la fonction sans faire d'UPSERT si il n'y a aucune donnée à traiter
 
-	logger.info(f"Préparation de {row_count} lignes à insérer")
+	logger.info("Lignes à traiter: %s", row_count)
 
-	# Le tri facilite la lecture en base et garde un ordre stable d'insertion.
-	final_df: DataFrame = (
-		filtered_df.withColumn("time", F.to_timestamp(col("time"), "HH:mm:ss"))
-		.orderBy("date", "time", "turbine_name")
-	)
+	# Conversion du DataFrame Spark en Pandas pour l'upsert ligne par ligne.
+	df_transformed_pd: pd.DataFrame = transformed_df.toPandas()
 
-	final_df.write.jdbc(
-		url=JDBC_URL,
-		table="silver.windpowerturbine_cleaned",
-		mode="append",
-		properties=JDBC_PROPS,
-	)
-	logger.info(f"{row_count} lignes insérées avec succès")
-	return row_count
+	upsert_sql = """
+		INSERT INTO silver.windpowerturbine_cleaned (
+			production_id, date, time, turbine_name, capacity, location_name, latitude, longitude, region, status,
+			responsible_department, wind_speed, wind_direction, energy_produced, day, month, quarter, year,
+			hour_of_day, minute_of_hour, second_of_minute, time_period
+		) VALUES (
+			%(production_id)s, %(date)s, %(time)s, %(turbine_name)s, %(capacity)s, %(location_name)s,
+			%(latitude)s, %(longitude)s, %(region)s, %(status)s, %(responsible_department)s,
+			%(wind_speed)s, %(wind_direction)s, %(energy_produced)s, %(day)s, %(month)s,
+			%(quarter)s, %(year)s, %(hour_of_day)s, %(minute_of_hour)s,
+			%(second_of_minute)s, %(time_period)s
+		)
+		ON CONFLICT (production_id) DO UPDATE SET
+			date = EXCLUDED.date,
+			time = EXCLUDED.time,
+			turbine_name = EXCLUDED.turbine_name,
+			capacity = EXCLUDED.capacity,
+			location_name = EXCLUDED.location_name,
+			latitude = EXCLUDED.latitude,
+			longitude = EXCLUDED.longitude,
+			region = EXCLUDED.region,
+			status = EXCLUDED.status,
+			responsible_department = EXCLUDED.responsible_department,
+			wind_speed = EXCLUDED.wind_speed,
+			wind_direction = EXCLUDED.wind_direction,
+			energy_produced = EXCLUDED.energy_produced,
+			day = EXCLUDED.day,
+			month = EXCLUDED.month,
+			quarter = EXCLUDED.quarter,
+			year = EXCLUDED.year,
+			hour_of_day = EXCLUDED.hour_of_day,
+			minute_of_hour = EXCLUDED.minute_of_hour,
+			second_of_minute = EXCLUDED.second_of_minute,
+			time_period = EXCLUDED.time_period;
+	"""
 
+	with psycopg.connect(
+		host=DB_HOST,
+		port=DB_PORT,
+		dbname=DB_NAME,
+		user=DB_USER,
+		password=DB_PASSWORD,
+		autocommit=True,
+	) as conn:
+		with conn.cursor() as cur:
+			# Compter les lignes AVANT UPSERT
+			cur.execute("SELECT COUNT(*) FROM silver.windpowerturbine_cleaned")
+			result_before = cur.fetchone()
+			count_before: int = result_before[0] if result_before else 0
 
-def log_final_count(spark: SparkSession) -> None:
-	"""Affiche le nombre total de lignes présentes en table Silver."""
-	final_count: int = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.windpowerturbine_cleaned",
-		properties=JDBC_PROPS,
-	).count()
-	logger.info(f"Total en base: {final_count} lignes")
+			# Exécuter l'UPSERT pour chaque ligne
+			for _, row in df_transformed_pd.iterrows():
+				params = {str(k): v for k, v in row.items()}
+				cur.execute(upsert_sql, params)
+
+			# Compter les lignes APRÈS UPSERT
+			cur.execute("SELECT COUNT(*) FROM silver.windpowerturbine_cleaned")
+			result_after = cur.fetchone()
+			count_after: int = result_after[0] if result_after else 0
+
+	new_rows_count: int = count_after - count_before
+	duplicates_avoided_count: int = row_count - new_rows_count
+
+	logger.info("%s lignes traitées avec UPSERT", row_count)
+	logger.info("Nouvelles lignes: %s", new_rows_count)
+	logger.info("Doublons évités: %s", duplicates_avoided_count)
+	
+	
 
 
 def main() -> None:
@@ -224,15 +240,16 @@ def main() -> None:
 	spark: SparkSession = init_spark()
 
 	try:
+		# ETAPE 1 : Lecture Bronze + transformation
 		bronze_df: DataFrame = read_bronze_data(spark)
 		transformed_df: DataFrame = transform_data(bronze_df)
-		total_count: int = transformed_df.count()
-		logger.info(f"Lignes à traiter: {total_count}")
+
+		# ETAPE 2 : Préparation table Silver
 		create_silver_table()
-		filtered_df: DataFrame = filter_new_rows(transformed_df, spark)
-		inserted_count: int = write_silver_data(filtered_df)
-		logger.info(f"Pipeline terminé. Nouvelles lignes insérées: {inserted_count}")
-		log_final_count(spark)
+
+		# ETAPE 3 : UPSERT en base
+		upsert_silver_data(transformed_df)
+	
 	finally:
 		spark.stop()
 		logger.info("Session Spark fermée")

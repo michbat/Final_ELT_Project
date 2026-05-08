@@ -10,6 +10,7 @@ import os
 import sys
 import psycopg
 from typing import Final
+import pandas as pd
 from dotenv import load_dotenv
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
@@ -72,11 +73,10 @@ def transform_data(bronze_df: DataFrame) -> DataFrame:
 	logger.info("Transformation et enrichissement des données météo")
 
 	transformed_df: DataFrame = (
-		bronze_df.withColumn("wind_speed_100m", round(col("wind_speed_100m"), 2))
-		.withColumn("wind_gusts_10m", round(col("wind_gusts_10m"), 2))
+		bronze_df
+  		.withColumn("wind_gusts_10m", round(col("wind_gusts_10m"), 2))
 		.withColumn("temperature_2m", round(col("temperature_2m"), 2))
-		.withColumn("pressure_msl", round(col("pressure_msl"), 2))
-		.withColumn("precipitation", round(col("precipitation"), 2))
+		.withColumn("cloud_cover", round(col("cloud_cover"), 2))
 		.withColumn("day", dayofmonth(col("date")))
 		.withColumn("month", month(col("date")))
 		.withColumn("quarter", quarter(col("date")))
@@ -109,11 +109,9 @@ def create_silver_table() -> None:
 		longitude NUMERIC(9,6),
 		region VARCHAR(100),
 		region_name VARCHAR(255),
-		wind_speed_100m NUMERIC(6,2),
 		wind_gusts_10m NUMERIC(6,2),
 		temperature_2m NUMERIC(5,2),
-		pressure_msl NUMERIC(7,2),
-		precipitation NUMERIC(8,2),
+		cloud_cover NUMERIC(5,2),
 		day INTEGER,
 		month INTEGER,
 		quarter INTEGER,
@@ -154,93 +152,88 @@ def create_silver_table() -> None:
 				logger.info("La contrainte UNIQUE existe déjà")
 
 
-def get_existing_business_keys(spark: SparkSession) -> DataFrame:
-	"""Récupère les clés métier déjà présentes dans la table Silver."""
-	existing_df: DataFrame = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.weatherforecastapi_cleaned",
-		properties=JDBC_PROPS,
-	)
-	return existing_df.select(
-		"date",
-		F.date_format(col("time"), "HH:mm:ss").alias("time"),
-		"region",
-		"region_name",
-	)
-
-
-def filter_new_rows(transformed_df: DataFrame, spark: SparkSession) -> DataFrame:
-	"""Retire les lignes déjà chargées et dédoublonne le lot courant sur la clé métier."""
-	logger.info(f"Filtrage des doublons sur la clé métier {['date', 'time', 'region', 'region_name']}")
- 
-	try:
-		existing_keys: DataFrame = get_existing_business_keys(spark)
-		filtered_df: DataFrame = transformed_df.join(
-			existing_keys,
-			on=["date", "time", "region", "region_name"],
-			how="left_anti",
-		)
-	except Exception as error:
-		logger.warning(
-			f"Lecture de la table Silver impossible ou table vide, insertion complète du lot: {error}"
-		)
-		filtered_df = transformed_df
-
-	# Garde une protection locale si le lot source contient un doublon inattendu.
-	return filtered_df.dropDuplicates(["date", "time", "region", "region_name"])
-
-
-def write_silver_data(filtered_df: DataFrame) -> int:
-	"""Trie puis insère les nouvelles lignes dans la table Silver."""
-	row_count: int = filtered_df.count()
-
+def upsert_silver_data(transformed_df: DataFrame) -> None:
+	"""Insère ou met à jour les données Silver via UPSERT PostgreSQL."""
+	row_count: int = transformed_df.count()
 	if row_count == 0:
-		logger.info("Aucune nouvelle donnée à insérer")
-		return 0
+		logger.info("Aucune donnée à traiter")
+		return # On sort de la fonction sans faire d'UPSERT si il n'y a aucune donnée à traiter
 
-	logger.info(f"Préparation de {row_count} lignes à insérer")
+	logger.info("Lignes à traiter: %s", row_count)
 
-	# Le tri facilite la lecture en base et garde un ordre stable d'insertion.
-	final_df: DataFrame = (
-		filtered_df.withColumn("time", F.to_timestamp(col("time"), "HH:mm:ss"))
-		.orderBy("date", "time", "region")
-	)
+	# On convertit le DataFrame Spark en Pandas pour faciliter l'itération et l'insertion ligne par ligne.
+	df_transformed_pd: pd.DataFrame = transformed_df.toPandas()
 
-	final_df.write.jdbc(
-		url=JDBC_URL,
-		table="silver.weatherforecastapi_cleaned",
-		mode="append",
-		properties=JDBC_PROPS,
-	)
-	logger.info(f"{row_count} lignes insérées avec succès")
-	return row_count
+	upsert_sql = """
+		INSERT INTO silver.weatherforecastapi_cleaned (
+			date, time, latitude, longitude, region, region_name,
+			wind_gusts_10m, temperature_2m, cloud_cover, day, month, quarter, year,
+			hour_of_day, minute_of_hour, second_of_minute, time_period
+		) VALUES (%(date)s, %(time)s, %(latitude)s, %(longitude)s, %(region)s, %(region_name)s,
+                %(wind_gusts_10m)s, %(temperature_2m)s, %(cloud_cover)s, %(day)s, %(month)s,%(quarter)s, %(year)s,%(hour_of_day)s, %(minute_of_hour)s, %(second_of_minute)s, %(time_period)s)
+		ON CONFLICT (date, time, region, region_name) DO UPDATE SET
+			latitude = EXCLUDED.latitude,
+			longitude = EXCLUDED.longitude,
+			wind_gusts_10m = EXCLUDED.wind_gusts_10m,
+			temperature_2m = EXCLUDED.temperature_2m,
+			cloud_cover = EXCLUDED.cloud_cover,
+			day = EXCLUDED.day,
+			month = EXCLUDED.month,
+			quarter = EXCLUDED.quarter,
+			year = EXCLUDED.year,
+			hour_of_day = EXCLUDED.hour_of_day,
+			minute_of_hour = EXCLUDED.minute_of_hour,
+			second_of_minute = EXCLUDED.second_of_minute,
+			time_period = EXCLUDED.time_period;
+	"""
 
+	with psycopg.connect(
+		host=DB_HOST,
+		port=DB_PORT,
+		dbname=DB_NAME,
+		user=DB_USER,
+		password=DB_PASSWORD,
+		autocommit=True,
+	) as conn:
+		with conn.cursor() as cur:
+			# Compter les lignes AVANT UPSERT
+			cur.execute("SELECT COUNT(*) FROM silver.weatherforecastapi_cleaned")
+			result_before = cur.fetchone()
+			count_before: int = result_before[0] if result_before else 0
 
-def log_final_count(spark: SparkSession) -> None:
-	"""Affiche le nombre total de lignes présentes en table Silver."""
-	final_count: int = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.weatherforecastapi_cleaned",
-		properties=JDBC_PROPS,
-	).count()
-	logger.info(f"Total en base: {final_count} lignes")
+			# Exécuter l'UPSERT pour chaque ligne
+			for _, row in df_transformed_pd.iterrows():
+				params = {str(k): v for k, v in row.items()}
+				cur.execute(upsert_sql, params)
 
+			# Compter les lignes APRÈS UPSERT
+			cur.execute("SELECT COUNT(*) FROM silver.weatherforecastapi_cleaned")
+			result_after = cur.fetchone()
+			count_after: int = result_after[0] if result_after else 0
+
+	new_rows_count: int = count_after - count_before
+	duplicates_avoided_count: int = row_count - new_rows_count
+
+	logger.info("%s lignes traitées avec UPSERT", row_count)
+	logger.info("Nouvelles lignes: %s", new_rows_count)
+	logger.info("Doublons évités: %s", duplicates_avoided_count)
+	
 
 def main() -> None:
 	"""Orchestre l'ensemble du pipeline Silver pour les données météo API."""
 	spark: SparkSession = init_spark()
 
 	try:
+		# ETAPE 1 : Lecture Bronze + transformation
 		bronze_df: DataFrame = read_bronze_data(spark)
 		transformed_df: DataFrame = transform_data(bronze_df)
-		total_count: int = transformed_df.count()
-		logger.info("Lignes à traiter: %s", total_count)
 
+		# ETAPE 2 : Preparation table Silver
 		create_silver_table()
-		filtered_df: DataFrame = filter_new_rows(transformed_df, spark)
-		inserted_count: int = write_silver_data(filtered_df)
-		logger.info("Pipeline terminé. Nouvelles lignes insérées: %s", inserted_count)
-		log_final_count(spark)
+
+		# ETAPE 3 : UPSERT en base
+		upsert_silver_data(transformed_df)
+	
 	finally:
 		spark.stop()
 		logger.info("Session Spark fermée")

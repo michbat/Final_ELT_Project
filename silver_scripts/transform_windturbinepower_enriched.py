@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import psycopg
+import pandas as pd
 from typing import Final
 from dotenv import load_dotenv
 from pyspark.sql import DataFrame, SparkSession
@@ -53,7 +54,6 @@ JDBC_PROPS: Final[dict[str, str]] = {
 WIND_SILVER_TABLE: Final[str] = "silver.windpowerturbine_cleaned"
 WEATHER_SILVER_TABLE: Final[str] = "silver.weatherforecastapi_cleaned"
 ENRICHED_SILVER_TABLE: Final[str] = "silver.windturbinepower_enriched"
-BUSINESS_KEY: Final[list[str]] = ["production_id", "date", "time"]
 
 
 def init_spark(app_name: str = "WindPowerEnrichedSilverTransformation") -> SparkSession:
@@ -118,11 +118,9 @@ def transform_data(windpt_df: DataFrame, weatherapi_df: DataFrame) -> DataFrame:
 		F.date_format(col("time"), "HH:mm:ss").alias("time"),
 		"region",
 		"region_name",
-		"wind_speed_100m",
 		"wind_gusts_10m",
 		"temperature_2m",
-		"pressure_msl",
-		"precipitation",
+		"cloud_cover",
 	)
 
 	enriched_df: DataFrame = (
@@ -142,12 +140,11 @@ def transform_data(windpt_df: DataFrame, weatherapi_df: DataFrame) -> DataFrame:
 			col("w.status").alias("status"),
 			col("w.responsible_department").alias("responsible_department"),
 			col("w.energy_produced").alias("energy_produced"),
-			col("m.wind_speed_100m").alias("wind_speed_100m"),
+			col("w.wind_speed").alias("wind_speed"),
 			col("m.wind_gusts_10m").alias("wind_gust_10m"),
 			col("w.wind_direction").alias("wind_direction"),
 			col("m.temperature_2m").alias("temperature_2m"),
-			col("m.pressure_msl").alias("pressure_msl"),
-			col("m.precipitation").alias("precipitation"),
+			col("m.cloud_cover").alias("cloud_cover"),
 			col("w.day").alias("day"),
 			col("w.month").alias("month"),
 			col("w.quarter").alias("quarter"),
@@ -180,12 +177,11 @@ def create_silver_table() -> None:
 		status VARCHAR(50),
 		responsible_department VARCHAR(100),
 		energy_produced NUMERIC(12,2),
-		wind_speed_100m NUMERIC(6,2),
+		wind_speed NUMERIC(6,2),
 		wind_gust_10m NUMERIC(6,2),
 		wind_direction VARCHAR(50),
 		temperature_2m NUMERIC(5,2),
-		pressure_msl NUMERIC(7,2),
-		precipitation NUMERIC(8,2),
+		cloud_cover NUMERIC(5,2),
 		day INTEGER,
 		month INTEGER,
 		quarter INTEGER,
@@ -208,74 +204,121 @@ def create_silver_table() -> None:
 		with conn.cursor() as cur:
 			cur.execute("CREATE SCHEMA IF NOT EXISTS silver;")
 			cur.execute(create_table_sql)
-			logger.info(f"Table silver.windturbinepower_enriched créée")
+
+			# Contrainte UNIQUE nécessaire pour ON CONFLICT (production_id, date, time)
+			try:
+				cur.execute(
+					"""
+					ALTER TABLE silver.windturbinepower_enriched
+					ADD CONSTRAINT unique_windturbinepower_enriched_business_key
+					UNIQUE (production_id, date, time);
+					"""
+				)
+				logger.info("Contrainte UNIQUE ajoutée sur (production_id, date, time)")
+			except (psycopg.errors.DuplicateObject, psycopg.errors.DuplicateTable):
+				logger.info("La contrainte UNIQUE existe déjà")
+
+			logger.info("Table silver.windturbinepower_enriched prête")
 
 
-def get_existing_business_keys(spark: SparkSession) -> DataFrame:
-	"""Récupère les clés métier déjà présentes dans la table enrichie."""
-	existing_df: DataFrame = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.windturbinepower_enriched",
-		properties=JDBC_PROPS,
-	)
-	return existing_df.select(
-		"production_id",
-		"date",
-		F.date_format(col("time"), "HH:mm:ss").alias("time"),
-	)
-
-
-def filter_new_rows(transformed_df: DataFrame, spark: SparkSession) -> DataFrame:
-	"""Retire les lignes déjà chargées selon la clé métier choisie."""
-	logger.info(f"Filtrage des doublons sur la clé métier ['production_id', 'date', 'time']")
-
-	try:
-		existing_keys: DataFrame = get_existing_business_keys(spark)
-		filtered_df: DataFrame = transformed_df.join(
-			existing_keys,
-			on=["production_id", "date", "time"],
-			how="left_anti",
-		)
-	except Exception as error:
-		logger.warning(
-			f"Lecture de la table enrichie impossible ou table vide, insertion complète du lot: {error}"
-		)
-		filtered_df = transformed_df
-
-	return filtered_df
-
-
-def write_silver_data(filtered_df: DataFrame, spark: SparkSession) -> int:
-	"""Trie puis insère les nouvelles lignes dans la table enrichie."""
-	row_count: int = filtered_df.count()
-
+def upsert_silver_data(enriched_df: DataFrame) -> None:
+	"""Insère ou met à jour les données enrichies via UPSERT PostgreSQL."""
+	row_count: int = enriched_df.count()
 	if row_count == 0:
-		logger.info("Aucune nouvelle donnée à insérer")
-		return 0
+		logger.info("Aucune donnée à traiter")
+		return
 
-	logger.info(f"Préparation de {row_count} lignes à insérer")
+	logger.info("Lignes enrichies à traiter: %s", row_count)
 
-	final_df: DataFrame = (
-		filtered_df.withColumn("time", F.to_timestamp(col("time"), "HH:mm:ss"))
-		.orderBy("date", "time", "region", "turbine_name")
-	)
+	# Conversion Spark -> pandas pour l'UPSERT ligne par ligne.
+	enriched_df_pd: pd.DataFrame = enriched_df.toPandas()
 
-	final_df.write.jdbc(
-		url=JDBC_URL,
-		table="silver.windturbinepower_enriched",
-		mode="append",
-		properties=JDBC_PROPS,
-	)
-	logger.info(f"{row_count} lignes insérées avec succès")
- 
-    # Vérification finale du nombre total de lignes en base après insertion.
-	final_count: int = spark.read.jdbc(
-		url=JDBC_URL,
-		table="silver.windturbinepower_enriched",
-		properties=JDBC_PROPS,
-	).count()
-	logger.info(f"Total en base: {final_count} lignes")
-	return row_count
+	upsert_sql = """
+		INSERT INTO silver.windturbinepower_enriched (
+			production_id,
+			weather_id,
+			date,
+			time,
+			latitude,
+			longitude,
+			region,
+			region_name,
+			turbine_name,
+			capacity,
+			status,
+			responsible_department,
+			energy_produced,
+			wind_speed,
+			wind_gust_10m,
+			wind_direction,
+			temperature_2m,
+			cloud_cover,
+			day,
+			month,
+			quarter,
+			year,
+			hour_of_day,
+			minute_of_hour,
+			second_of_minute,
+			time_period
+		)
+		VALUES (%(production_id)s, %(weather_id)s, %(date)s, %(time)s, %(latitude)s, %(longitude)s, %(region)s, %(region_name)s, %(turbine_name)s, %(capacity)s, %(status)s, %(responsible_department)s, %(energy_produced)s, %(wind_speed)s, %(wind_gust_10m)s, %(wind_direction)s, %(temperature_2m)s, %(cloud_cover)s, %(day)s, %(month)s, %(quarter)s, %(year)s, %(hour_of_day)s, %(minute_of_hour)s, %(second_of_minute)s, %(time_period)s)
+		ON CONFLICT ON CONSTRAINT unique_windturbinepower_enriched_business_key DO UPDATE SET
+			weather_id = EXCLUDED.weather_id,
+			latitude = EXCLUDED.latitude,
+			longitude = EXCLUDED.longitude,
+			region = EXCLUDED.region,
+			region_name = EXCLUDED.region_name,
+			turbine_name = EXCLUDED.turbine_name,
+			capacity = EXCLUDED.capacity,
+			status = EXCLUDED.status,
+			responsible_department = EXCLUDED.responsible_department,
+			energy_produced = EXCLUDED.energy_produced,
+			wind_speed = EXCLUDED.wind_speed,
+			wind_gust_10m = EXCLUDED.wind_gust_10m,
+			wind_direction = EXCLUDED.wind_direction,
+			temperature_2m = EXCLUDED.temperature_2m,
+			cloud_cover = EXCLUDED.cloud_cover,
+			day = EXCLUDED.day,
+			month = EXCLUDED.month,
+			quarter = EXCLUDED.quarter,
+			year = EXCLUDED.year,
+			hour_of_day = EXCLUDED.hour_of_day,
+			minute_of_hour = EXCLUDED.minute_of_hour,
+			second_of_minute = EXCLUDED.second_of_minute,
+			time_period = EXCLUDED.time_period;
+	"""
+
+	with psycopg.connect(
+		host=DB_HOST,
+		port=DB_PORT,
+		dbname=DB_NAME,
+		user=DB_USER,
+		password=DB_PASSWORD,
+		autocommit=True,
+	) as conn:
+		with conn.cursor() as cur:
+			# Compter les lignes avant UPSERT.
+			cur.execute("SELECT COUNT(*) FROM silver.windturbinepower_enriched")
+			result_before = cur.fetchone()
+			count_before: int = result_before[0] if result_before else 0
+
+			# Exécuter l'UPSERT pour chaque ligne.
+			for _, row in enriched_df_pd.iterrows():
+				params = {str(k): v for k, v in row.items()}
+				cur.execute(upsert_sql, params)
+
+			# Compter les lignes après UPSERT.
+			cur.execute("SELECT COUNT(*) FROM silver.windturbinepower_enriched")
+			result_after = cur.fetchone()
+			count_after: int = result_after[0] if result_after else 0
+
+	new_rows_count: int = count_after - count_before
+	duplicates_avoided_count: int = row_count - new_rows_count
+
+	logger.info("%s lignes traitées avec UPSERT", row_count)
+	logger.info("Nouvelles lignes: %s", new_rows_count)
+	logger.info("Doublons évités: %s", duplicates_avoided_count)
 
 
 def main() -> None:
@@ -285,13 +328,8 @@ def main() -> None:
 	try:
 		wind_df, weather_df = read_silver_sources(spark)
 		enriched_df: DataFrame = transform_data(wind_df, weather_df)
-		total_count: int = enriched_df.count()
-		logger.info("Lignes enrichies à traiter: %s", total_count)
-
 		create_silver_table()
-		filtered_df: DataFrame = filter_new_rows(enriched_df, spark)
-		inserted_count: int = write_silver_data(filtered_df, spark)
-		logger.info("Pipeline terminé. Nouvelles lignes insérées: %s", inserted_count)
+		upsert_silver_data(enriched_df)
 	finally:
 		spark.stop()
 		logger.info("Session Spark fermée")
