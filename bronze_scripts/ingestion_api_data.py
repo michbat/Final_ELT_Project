@@ -21,9 +21,13 @@ STACK : PySpark + PostgreSQL JDBC + requests
 import os
 import sys
 import logging
-import requests
 import click
 import psycopg
+import openmeteo_requests
+import pandas as pd
+import numpy as np
+import requests_cache
+from retry_requests import retry
 from dotenv import load_dotenv
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
@@ -63,27 +67,28 @@ REGIONS = {
     "Region A": {
         "latitude": 34.0522, 
         "longitude": -118.2437, 
-        "region_name": "Los Angeles, California, USA"
+        "region_name": "Los Angeles, California, USA",
+        "timezone": "America/Los_Angeles"
     },
     "Region B": {
         "latitude": 36.7783, 
         "longitude": -119.4179, 
-        "region_name": "Fresno/Central Valley, California, USA"
+        "region_name": "Fresno/Central Valley, California, USA",
+        "timezone": "America/Los_Angeles"
     },
     "Region C": {
         "latitude": 40.7128, 
         "longitude": -74.006, 
-        "region_name": "New York City, New York, USA"
+        "region_name": "New York City, New York, USA",
+        "timezone": "America/New_York"
     }
 }
 
-# Paramètres API Open-Meteo (sélection ciblée pour enrichissement futur)
+# Paramètres API Open-Meteo (Archive API utilise 'hourly' pour les données historiques)
 WEATHER_FIELDS = [
-    "wind_speed_100m",       # Vitesse à hauteur de hub (~100m)
-    "wind_gusts_10m",        # Rafales (impact maintenance)
-    "temperature_2m",        # Température (densité de l'air)
-    "pressure_msl",          # Pression (calcul densité air)
-    "precipitation"          # Précipitations (impact opérationnel)
+    "wind_gusts_10m",  # Rafales (impact maintenance)
+    "temperature_2m",  # Température maximale (impact maintenance)      
+    "cloud_cover"      # Couverture nuageuse totale (impact maintenance)       
 ]
 
 OPENMETEO_PARAMS = {
@@ -98,11 +103,9 @@ WEATHER_SCHEMA = StructType([
     StructField("longitude", DoubleType(), False),
     StructField("region", StringType(), False),
     StructField("region_name", StringType(), False),
-    StructField("wind_speed_100m", FloatType(), True),
     StructField("wind_gusts_10m", FloatType(), True),
     StructField("temperature_2m", FloatType(), True),
-    StructField("pressure_msl", FloatType(), True),
-    StructField("precipitation", FloatType(), True)
+    StructField("cloud_cover", FloatType(), True)
 ])
 
 JDBC_URL = f"jdbc:postgresql://{DB_HOST}:{DB_PORT}/{DB_NAME}"
@@ -145,11 +148,9 @@ def create_weather_table() -> None:
                         longitude NUMERIC(9,6) NOT NULL,
                         region VARCHAR(100) NOT NULL,
                         region_name VARCHAR(255) NOT NULL,
-                        wind_speed_100m NUMERIC(6,2),
                         wind_gusts_10m NUMERIC(6,2),
                         temperature_2m NUMERIC(5,2),
-                        pressure_msl NUMERIC(7,2),
-                        precipitation NUMERIC(8,2),
+                        cloud_cover NUMERIC(5,2),
                         ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         source_api VARCHAR(100) DEFAULT 'Open-Meteo',
                         UNIQUE(region, date, time)
@@ -170,7 +171,7 @@ def create_weather_table() -> None:
         raise
 
 
-def fetch_openmeteo_hourly(lat: float, lon: float, date: str) -> dict:
+def fetch_openmeteo_hourly(lat: float, lon: float, date: str, timezone: str, openmeteo_client) -> dict:
     """Appelle l'API Open-Meteo pour une région et une date donnée"""
     
     url = "https://archive-api.open-meteo.com/v1/archive"
@@ -180,193 +181,185 @@ def fetch_openmeteo_hourly(lat: float, lon: float, date: str) -> dict:
         "start_date": date,
         "end_date": date,
         "hourly": ",".join(OPENMETEO_PARAMS["hourly"]),
-        "timezone": "UTC"
+        "timezone": timezone
     }
     
     try:
         logger.info(f"Appel API pour ({lat}, {lon}) le {date}")
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
-        return {"success": True, "data": response.json(), "params": params}
-    except requests.RequestException as e:
+        responses = openmeteo_client.weather_api(url, params=params)
+        if not responses:
+            return {"success": False, "error": "Aucune réponse API"}
+        return {"success": True, "response": responses[0], "params": params}
+    except Exception as e:
         logger.error(f"Erreur API pour ({lat}, {lon}): {e}")
         return {"success": False, "error": str(e), "params": params}
 
 
-def interpolate_value(val1: float | None, val2: float | None, fraction: float) -> float | None:
-    """Interpole linéairement entre deux valeurs (gère les valeurs None)"""
-    if val1 is None or val2 is None:
-        return val1 if val1 is not None else val2
-    return val1 + (val2 - val1) * fraction
+def extract_hourly_data_pandas(response, timezone: str) -> pd.DataFrame:
+    """
+    Extrait les données horaires de la réponse API Open-Meteo et les organise dans un DataFrame pandas.
+    """
+    hourly = response.Hourly()
+    if hourly is None:
+        logger.warning("Données hourly indisponibles")
+        return pd.DataFrame()
+
+    # ÉTAPE 1 : Récupération des timestamps horaires (24 points)
+    timestamps_hourly = pd.date_range(
+        start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+        end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+        freq=pd.Timedelta(seconds=hourly.Interval()),
+        inclusive="left"
+    )
+    n_hourly = len(timestamps_hourly)
+    
+    # ÉTAPE 2 : Extraction des 3 variables avec gestion d'erreurs
+    # Variable 1: wind_gusts_10m
+    try:
+        var = hourly.Variables(0)
+        wind_gusts_10m = var.ValuesAsNumpy() if var else np.full(n_hourly, np.nan, dtype=float)
+    except Exception as e:
+        logger.warning(f"Erreur extraction wind_gusts_10m: {e}")
+        wind_gusts_10m = np.full(n_hourly, np.nan, dtype=float)
+    
+    # Variable 2: temperature_2m
+    try:
+        var = hourly.Variables(1)
+        temperature_2m = var.ValuesAsNumpy() if var else np.full(n_hourly, np.nan, dtype=float)
+    except Exception as e:
+        logger.warning(f"Erreur extraction temperature_2m: {e}")
+        temperature_2m = np.full(n_hourly, np.nan, dtype=float)
+    
+    # Variable 3: cloud_cover
+    try:
+        var = hourly.Variables(2)
+        cloud_cover = var.ValuesAsNumpy() if var else np.full(n_hourly, np.nan, dtype=float)
+    except Exception as e:
+        logger.warning(f"Erreur extraction cloud_cover: {e}")
+        cloud_cover = np.full(n_hourly, np.nan, dtype=float)
+
+    # ÉTAPE 3 : Création DataFrame avec conversion timezone
+    df_hourly = pd.DataFrame({
+        'timestamp': timestamps_hourly,
+        'wind_gusts_10m': wind_gusts_10m,
+        'temperature_2m': temperature_2m,
+        'cloud_cover': cloud_cover
+    })
+    df_hourly['timestamp'] = df_hourly['timestamp'].dt.tz_convert(timezone)
+    
+    return df_hourly
 
 
-def extract_hourly_data_by_hour(api_data: dict, target_date: str) -> dict:
+def interpolate_to_10min(df_hourly: pd.DataFrame, target_date: str, timezone: str, 
+    lat: float, lon: float, region: str, region_name: str) -> list:
     """
-    Extrait les données horaires de l'API et les organise par heure (0-23).
-    
-    Retourne un dict : {0: {field: value}, 1: {field: value}, ...}
+    Interpole les données horaires pour créer des points toutes les 10 minutes (24 → 144 points).
     """
-    hourly = api_data.get("hourly", {})
-    times = hourly.get("time", [])
+    # ÉTAPE 1 : Création des 144 timestamps 10-min (00:00 à 23:50)
+    start_time = pd.Timestamp(target_date, tz=timezone)
+    timestamps_10min = pd.date_range(
+        start=start_time,
+        end=start_time + pd.Timedelta(days=1) - pd.Timedelta(minutes=10),
+        freq='10min'
+    )
+    df_10min = pd.DataFrame({'timestamp': timestamps_10min})
     
-    # Créer un dictionnaire avec toutes les valeurs pour chaque champ
-    hourly_by_field = {field: hourly.get(field, []) for field in WEATHER_FIELDS}
+    # ÉTAPE 2 : Fusion timestamps horaires + 10-min pour interpolation
+    df_combined = pd.concat([
+        df_hourly[['timestamp']].assign(source='hourly'),
+        df_10min.assign(source='interpolated')
+    ]).sort_values('timestamp').reset_index(drop=True)
     
-    # Organiser par heure
-    data_by_hour = {}
-    for i, timestamp_str in enumerate(times):
-        if timestamp_str.startswith(target_date):
-            hour = int(timestamp_str.split("T")[1].split(":")[0])
-            data_by_hour[hour] = {
-                field: values[i] for field, values in hourly_by_field.items()
-            }
+    df_combined = df_combined.merge(df_hourly, on='timestamp', how='left')
     
-    return data_by_hour
-
-
-def interpolate_weather_fields(current_data: dict, next_data: dict, fraction: float) -> dict:
-    """
-    Interpole tous les champs météo entre deux heures.
+    # ÉTAPE 3 : Interpolation linéaire des 3 variables
+    df_combined['wind_gusts_10m'] = df_combined['wind_gusts_10m'].interpolate(method='linear')
+    df_combined['temperature_2m'] = df_combined['temperature_2m'].interpolate(method='linear')
+    df_combined['cloud_cover'] = df_combined['cloud_cover'].interpolate(method='linear')
+        
+    # ÉTAPE 4 : Filtrage uniquement les timestamps 10-min (144 points)
+    df_final = df_combined[df_combined['source'] == 'interpolated'].copy()
     
-    Args:
-        current_data: Données de l'heure actuelle {field: value}
-        next_data: Données de l'heure suivante {field: value}
-        fraction: Position entre les deux heures (0.0 à ~0.83 pour 0-50min)
-    
-    Returns:
-        Dict avec les valeurs interpolées pour chaque champ
-    """
-    interpolated = {}
-    for field in WEATHER_FIELDS:
-        current_val = current_data.get(field)
-        next_val = next_data.get(field)
-        interpolated[field] = interpolate_value(current_val, next_val, fraction)
-    
-    return interpolated
-
-
-def create_weather_record(date: str, hour: int, minute: int,  region: str, region_name: str, lat: float, lon: float, 
-    weather_values: dict) -> dict:
-    """
-    Crée un enregistrement météo complet pour un instant donné.
-    """
-    time_str = f"{hour:02d}:{minute:02d}:00"
-    
-    record = {
-        "date": date,
-        "time": time_str,
-        "latitude": lat,
-        "longitude": lon,
-        "region": region,
-        "region_name": region_name
-    }
-    
-    # Ajouter tous les champs météo
-    record.update(weather_values)
-    
-    return record
-
-
-def generate_10min_intervals(data_by_hour: dict, target_date: str,region: str, region_name: str, lat: float, lon: float) -> list:
-    """
-    Génère des enregistrements toutes les 10 minutes (00:00 à 23:50)
-    en interpolant entre les données horaires.
-    """
+    # ÉTAPE 5 : Conversion en records pour Spark
     records = []
-    
-    for hour in range(24):
-        for minute in range(0, 60, 10):
-            # Récupérer les données de l'heure actuelle et suivante
-            current_data = data_by_hour.get(hour, {})
-            next_hour = (hour + 1) % 24
-            next_data = data_by_hour.get(next_hour, {})
-            
-            # Calculer la fraction pour l'interpolation (0.0 = début heure, 0.833 = 50min)
-            fraction = minute / 60.0
-            
-            # Interpoler tous les champs météo
-            weather_values = interpolate_weather_fields(current_data, next_data, fraction)
-            
-            # Créer l'enregistrement complet
-            record = create_weather_record(
-                date=target_date,
-                hour=hour,
-                minute=minute,
-                region=region,
-                region_name=region_name,
-                lat=lat,
-                lon=lon,
-                weather_values=weather_values
-            )
-            
-            records.append(record)
-    
+    for _, row in df_final.iterrows():
+        ts = row['timestamp']
+        records.append({
+            "date": ts.strftime("%Y-%m-%d"),
+            "time": ts.strftime("%H:%M:%S"),
+            "latitude": float(lat),
+            "longitude": float(lon),
+            "region": region,
+            "region_name": region_name,
+            "wind_gusts_10m": float(row['wind_gusts_10m']) if pd.notna(row['wind_gusts_10m']) else None,
+            "temperature_2m": float(row['temperature_2m']) if pd.notna(row['temperature_2m']) else None,
+            "cloud_cover": float(row['cloud_cover']) if pd.notna(row['cloud_cover']) else None
+        })
+
+    logger.info(f"{len(records)} enregistrements (10-min) créés pour {region}")
     return records
 
 
-def parse_api_response_to_10min(region: str, region_name: str, api_result: dict, target_date: str) -> list:
+def parse_api_response_to_10min(region: str, region_name: str, coords: dict, 
+    api_result: dict, target_date: str) -> list:
     """
-    Transforme la réponse API horaire en données toutes les 10 minutes (00:00 à 23:50).
-    
-    Étapes :
-    1. Vérifie le succès de l'appel API
-    2. Extrait et organise les données horaires
-    3. Génère 144 points interpolés (24h × 6 intervalles de 10min)
+    Transforme la réponse API horaire en données 10-minutes (24 → 144 points).
     """
-    # Vérifier le succès de l'appel API
+    # Vérification succès API
     if not api_result["success"]:
         logger.warning(f"API non disponible pour {region}")
         return []
     
-    api_data = api_result["data"]
+    response = api_result["response"]
     
-    # Extraire les données horaires organisées par heure (0-23)
-    data_by_hour = extract_hourly_data_by_hour(api_data, target_date)
-    
-    if not data_by_hour:
+    # Extraction données horaires
+    df_hourly = extract_hourly_data_pandas(response, coords["timezone"])
+    if df_hourly.empty:
         logger.warning(f"Aucune donnée pour {region} le {target_date}")
         return []
     
-    # Générer les intervalles de 10 minutes avec interpolation
-    records = generate_10min_intervals(
-        data_by_hour=data_by_hour,
+    # Interpolation → 144 points 10-min
+    records = interpolate_to_10min(
+        df_hourly=df_hourly,
         target_date=target_date,
+        timezone=coords["timezone"],
+        lat=float(response.Latitude()),
+        lon=float(response.Longitude()),
         region=region,
-        region_name=region_name,
-        lat=api_data["latitude"],
-        lon=api_data["longitude"]
+        region_name=region_name
     )
     
-    logger.info(f"{len(records)} enregistrements interpolés pour {region}")
     return records
 
 
 def ingest_weather_to_bronze(spark: SparkSession, target_date: str) -> int:
     """
     Récupère les données météo pour chaque région et les insère en Bronze.
-    
-    Workflow :
-    1. Appel API Open-Meteo pour chaque région
-    2. Interpolation des données horaires → intervalles de 10min
-    3. Création DataFrame Spark
-    4. Écriture PostgreSQL
     """
     logger.info(f"Ingestion météo pour la date : {target_date}")
     
-    # Collecter les données de toutes les régions
+    # ÉTAPE 1 : Configuration client API avec cache et retry
+    cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+    openmeteo = openmeteo_requests.Client(session=retry_session) # type: ignore
+    
+    # ÉTAPE 2 : Collecte des données pour les 3 régions
     all_records = []
     for region, coords in REGIONS.items():
-        # Appel API
+        # Appel API horaire
         result = fetch_openmeteo_hourly(
             lat=coords["latitude"],
             lon=coords["longitude"],
-            date=target_date
+            date=target_date,
+            timezone=coords["timezone"],
+            openmeteo_client=openmeteo
         )
         
-        # Parsing et interpolation
+        # Parsing et interpolation (24 → 144 points)
         records = parse_api_response_to_10min(
             region=region,
             region_name=coords["region_name"],
+            coords=coords,
             api_result=result,
             target_date=target_date
         )
@@ -376,12 +369,14 @@ def ingest_weather_to_bronze(spark: SparkSession, target_date: str) -> int:
         logger.warning("Aucune donnée météo à ingérer")
         return 0
     
-    # Création DataFrame avec le schéma défini
+    logger.info(f"Total : {len(all_records)} enregistrements (attendu : 432 pour 3 régions)")
+    
+    # ÉTAPE 3 : Création DataFrame Spark
     df_weather = spark.createDataFrame(all_records, WEATHER_SCHEMA) \
         .withColumn("ingested_at", current_timestamp()) \
         .orderBy("date", "time", "region")
     
-    # Écriture PostgreSQL
+    # ÉTAPE 4 : Écriture PostgreSQL
     logger.info(f"Écriture de {len(all_records)} enregistrements dans bronze.weatherforecastapi_raw...")
     
     df_weather.write \
