@@ -15,6 +15,7 @@ from airflow.providers.standard.operators.bash import BashOperator
 from airflow.models import Param
 from dotenv import load_dotenv
 import pendulum
+import openmeteo_requests
 
 # Racine projet montée dans le conteneur Airflow
 PROJECT_ROOT = "/opt/airflow/project"
