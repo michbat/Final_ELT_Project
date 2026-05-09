@@ -3,13 +3,12 @@ DAG ELT Wind Turbine Power
 Orchestre les scripts Bronze → Silver → Gold via BashOperator.
 
 Paramètres du DAG (configurables au déclenchement manuel) :
-  - jour  : jour à ingérer (int, défaut = 15)
-  - mois  : mois à ingérer (int, défaut = 6)
-  - annee : année à ingérer (int, défaut = 2024)
+    - date_ingestion : date à ingérer (YYYY-MM-DD)
 """
 
 
 import os
+from datetime import date, timedelta
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.models import Param
@@ -31,6 +30,19 @@ def _required_env(name: str) -> str:
     if not value:
         raise ValueError(f"La variable d'environnement {name} est obligatoire")
     return value
+
+
+def _allowed_dates(start: date, end: date) -> list[str]:
+    """Retourne toutes les dates autorisées au format YYYY-MM-DD (bornes incluses)."""
+    values: list[str] = []
+    current = start
+    while current <= end:
+        values.append(current.isoformat())
+        current += timedelta(days=1)
+    return values
+
+
+ALLOWED_INGESTION_DATES = _allowed_dates(date(2024, 6, 15), date(2024, 8, 3))
 
 
 # Variables d'environnement transmises aux tâches
@@ -57,9 +69,13 @@ with DAG(
     catchup=False,
     tags=["elt", "wind-turbine", "pyspark"],
     params={
-        "jour": Param(15, type="integer", description="Jour à ingérer (ex: 15)"),
-        "mois": Param(6, type="integer", description="Mois à ingérer (ex: 6)"),
-        "annee": Param(2024, type="integer", description="Année à ingérer (ex: 2024)"), 
+        "date_ingestion": Param(
+            "2024-06-15",
+            type="string",
+            format="date",
+            enum=ALLOWED_INGESTION_DATES,
+            description="Date à ingérer (intervalle autorisé: 2024-06-15 à 2024-08-03)",
+        ),
     }  # pyright: ignore[reportArgumentType]
 ) as dag:
 
@@ -68,9 +84,9 @@ with DAG(
         task_id="bronze_windturbine",
         bash_command=(
             "python bronze_scripts/ingestion_windturbinepower_data.py"
-            " --jour {{ params.jour }}"
-            " --mois {{ params.mois }}"
-            " --annee {{ params.annee }}"
+            " --jour {{ params.date_ingestion[8:10] }}"
+            " --mois {{ params.date_ingestion[5:7] }}"
+            " --annee {{ params.date_ingestion[0:4] }}"
         ),
         env=ETL_ENV,
         append_env=True,
@@ -81,9 +97,9 @@ with DAG(
         task_id="bronze_api",
         bash_command=(
             "python bronze_scripts/ingestion_api_data.py"
-            " --jour {{ params.jour }}"
-            " --mois {{ params.mois }}"
-            " --annee {{ params.annee }}"
+            " --jour {{ params.date_ingestion[8:10] }}"
+            " --mois {{ params.date_ingestion[5:7] }}"
+            " --annee {{ params.date_ingestion[0:4] }}"
         ),
         env=ETL_ENV,
         append_env=True,
