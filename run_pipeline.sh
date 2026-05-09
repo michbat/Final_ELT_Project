@@ -16,6 +16,17 @@ if ! [[ "$JOUR" =~ ^[0-9]{1,2}$ && "$MOIS" =~ ^[0-9]{1,2}$ && "$ANNEE" =~ ^[0-9]
   exit 1
 fi
 
+# Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)
+DATE_SAISIE="${ANNEE}$(printf '%02d' $MOIS)$(printf '%02d' $JOUR)"
+DATE_MIN="20240615"  # 15/06/2024
+DATE_MAX="20240803"  # 03/08/2024
+
+if [[ "$DATE_SAISIE" -lt "$DATE_MIN" || "$DATE_SAISIE" -gt "$DATE_MAX" ]]; then
+  echo "Erreur: la date ${JOUR}/${MOIS}/${ANNEE} est hors de l'intervalle autorisé."
+  echo "Plage acceptable: 15/06/2024 à 03/08/2024 (inclus)."
+  exit 1
+fi
+
 echo "[1/3] Lancement de bronze pour la date ${JOUR}/${MOIS}/${ANNEE}..."
 INGEST_JOUR="$JOUR" INGEST_MOIS="$MOIS" INGEST_ANNEE="$ANNEE" docker compose up bronze
 

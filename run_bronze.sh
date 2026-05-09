@@ -30,6 +30,17 @@ else
     exit 1
 fi
 
+# Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)
+DATE_SAISIE="${INGEST_ANNEE}$(printf '%02d' $INGEST_MOIS)$(printf '%02d' $INGEST_JOUR)"
+DATE_MIN="20240615"  # 15/06/2024
+DATE_MAX="20240803"  # 03/08/2024
+
+if [[ "$DATE_SAISIE" -lt "$DATE_MIN" || "$DATE_SAISIE" -gt "$DATE_MAX" ]]; then
+  echo "ERREUR: la date ${INGEST_JOUR}/${INGEST_MOIS}/${INGEST_ANNEE} est hors de l'intervalle autorisé." >&2
+  echo "Plage acceptable: 15/06/2024 à 03/08/2024 (inclus)." >&2
+  exit 1
+fi
+
 # Vérifier que les variables d'environnement critiques sont définies
 if [ -z "${DB_USER}" ] || [ -z "${DB_PASSWORD}" ] || [ -z "${DB_NAME}" ]; then
 	echo "ERREUR: les variables d'environnement DB_USER, DB_PASSWORD et DB_NAME doivent être définies" >&2

@@ -78,14 +78,14 @@ def build_dimensions(df: DataFrame) -> tuple[DataFrame, DataFrame, DataFrame, Da
         df.select("date", "day", "month", "quarter", "year")
         .distinct()
         .withColumnRenamed("date", "date_id")
-        .select("date_id", "day", "month", "quarter", "year")
+        .orderBy("date_id")
     )
 
     time_dim: DataFrame = (
         df.select("time", "hour_of_day", "minute_of_hour", "second_of_minute", "time_period")
         .distinct()
         .withColumnRenamed("time", "time_id")
-        .select("time_id", "hour_of_day", "minute_of_hour", "second_of_minute", "time_period")
+        .orderBy("time_id")
     )
 
     turbine_dim: DataFrame = (
@@ -93,6 +93,7 @@ def build_dimensions(df: DataFrame) -> tuple[DataFrame, DataFrame, DataFrame, Da
         .distinct()
         .withColumn("turbine_id", F.abs(F.hash(F.concat_ws("_", F.col("turbine_name"), F.col("region")))))
         .select("turbine_id", "turbine_name", "capacity", "latitude", "longitude", "region", "region_name")
+        .orderBy("turbine_name","region")
     )
 
     operational_status_dim: DataFrame = (
@@ -113,6 +114,7 @@ def build_dimensions(df: DataFrame) -> tuple[DataFrame, DataFrame, DataFrame, Da
             F.abs(F.hash(F.concat_ws("_", F.col("region"), F.col("latitude"), F.col("longitude")))),
         )
         .select("location_id", "latitude", "longitude", "region", "region_name")
+        .orderBy("region","region_name")
     )
 
     return date_dim, time_dim, turbine_dim, operational_status_dim, location_dim
@@ -154,7 +156,7 @@ def build_facts(df: DataFrame,turbine_dim: DataFrame,operational_status_dim: Dat
             "turbine_id",
             "status_id",
             "energy_produced",
-            "wind_speed_100m",
+            "wind_speed",
             "wind_direction",
         )
         .select(
@@ -164,10 +166,10 @@ def build_facts(df: DataFrame,turbine_dim: DataFrame,operational_status_dim: Dat
             "turbine_id",
             "status_id",
             "energy_produced",
-            "wind_speed_100m",
+            "wind_speed",
             "wind_direction",
         )
-        .orderBy("date_id", "time_id", "turbine_id")
+        .orderBy("fact_production_id","date_id", "time_id", "turbine_id")
     )
 
     fact_weather_conditions: DataFrame = (
@@ -177,10 +179,9 @@ def build_facts(df: DataFrame,turbine_dim: DataFrame,operational_status_dim: Dat
             col("time").alias("time_id"),
             "location_id",
             "temperature_2m",
-            "pressure_msl",
-            "precipitation",
+            "cloud_cover",
             "wind_gust_10m",
-            "wind_speed_100m",
+            "wind_speed",
         )
         .select(
             "fact_weather_id",
@@ -188,13 +189,12 @@ def build_facts(df: DataFrame,turbine_dim: DataFrame,operational_status_dim: Dat
             "time_id",
             "location_id",
             "temperature_2m",
-            "pressure_msl",
-            "precipitation",
+            "cloud_cover",
             "wind_gust_10m",
-            "wind_speed_100m",
+            "wind_speed",
         )
         .distinct()
-        .orderBy("date_id", "time_id", "location_id")
+        .orderBy("fact_weather_id","date_id", "time_id", "location_id")
     )
 
     return fact_energy_production, fact_weather_conditions
@@ -282,7 +282,7 @@ def create_gold_schema_and_tables() -> None:
                     turbine_id BIGINT NOT NULL,
                     status_id BIGINT NOT NULL,
                     energy_produced NUMERIC(12,2),
-                    wind_speed_100m NUMERIC(6,2),
+                    wind_speed NUMERIC(6,2),
                     wind_direction VARCHAR(10),
                     FOREIGN KEY (date_id) REFERENCES gold.date_dim(date_id),
                     FOREIGN KEY (time_id) REFERENCES gold.time_dim(time_id),
@@ -299,11 +299,10 @@ def create_gold_schema_and_tables() -> None:
                     date_id DATE NOT NULL,
                     time_id TIME NOT NULL,
                     location_id BIGINT NOT NULL,
-                    temperature_2m NUMERIC(5,2),
-                    pressure_msl NUMERIC(7,2),
-                    precipitation NUMERIC(8,2),
+                    wind_speed NUMERIC(6,2),
                     wind_gust_10m NUMERIC(6,2),
-                    wind_speed_100m NUMERIC(6,2),
+                    temperature_2m NUMERIC(5,2),
+                    cloud_cover NUMERIC(5,2),
                     FOREIGN KEY (date_id) REFERENCES gold.date_dim(date_id),
                     FOREIGN KEY (time_id) REFERENCES gold.time_dim(time_id),
                     FOREIGN KEY (location_id) REFERENCES gold.location_dim(location_id)
@@ -438,7 +437,7 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
     fact_energy_sql: str = """
         INSERT INTO gold.fact_energy_production
         (fact_production_id, date_id, time_id, turbine_id, status_id,
-        energy_produced, wind_speed_100m, wind_direction)
+        energy_produced, wind_speed, wind_direction)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (fact_production_id) DO UPDATE SET
             date_id = EXCLUDED.date_id,
@@ -446,23 +445,22 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
             turbine_id = EXCLUDED.turbine_id,
             status_id = EXCLUDED.status_id,
             energy_produced = EXCLUDED.energy_produced,
-            wind_speed_100m = EXCLUDED.wind_speed_100m,
+            wind_speed = EXCLUDED.wind_speed,
             wind_direction = EXCLUDED.wind_direction;
     """
     fact_weather_sql: str = """
         INSERT INTO gold.fact_weather_conditions
         (fact_weather_id, date_id, time_id, location_id,
-        temperature_2m, pressure_msl, precipitation, wind_gust_10m, wind_speed_100m)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        temperature_2m, wind_gust_10m, wind_speed, cloud_cover)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (fact_weather_id) DO UPDATE SET
             date_id = EXCLUDED.date_id,
             time_id = EXCLUDED.time_id,
             location_id = EXCLUDED.location_id,
             temperature_2m = EXCLUDED.temperature_2m,
-            pressure_msl = EXCLUDED.pressure_msl,
-            precipitation = EXCLUDED.precipitation,
             wind_gust_10m = EXCLUDED.wind_gust_10m,
-            wind_speed_100m = EXCLUDED.wind_speed_100m;
+            wind_speed = EXCLUDED.wind_speed,
+            cloud_cover = EXCLUDED.cloud_cover;
     """
 
     with psycopg.connect(
@@ -485,7 +483,7 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
                         "turbine_id",
                         "status_id",
                         "energy_produced",
-                        "wind_speed_100m",
+                        "wind_speed",
                         "wind_direction",
                     ],
                 ),
@@ -499,10 +497,9 @@ def upsert_facts(fact_energy_production: DataFrame, fact_weather_conditions: Dat
                         "time_id",
                         "location_id",
                         "temperature_2m",
-                        "pressure_msl",
-                        "precipitation",
                         "wind_gust_10m",
-                        "wind_speed_100m",
+                        "wind_speed",
+                        "cloud_cover",
                     ],
                 ),
             }

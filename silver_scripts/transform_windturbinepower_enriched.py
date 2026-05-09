@@ -101,6 +101,7 @@ def transform_data(windpt_df: DataFrame, weatherapi_df: DataFrame) -> DataFrame:
 		"status",
 		"responsible_department",
 		"energy_produced",
+		"wind_speed",
 		"wind_direction",
 		"day",
 		"month",
@@ -155,7 +156,7 @@ def transform_data(windpt_df: DataFrame, weatherapi_df: DataFrame) -> DataFrame:
 			col("w.time_period").alias("time_period"),
 		)
 	)
-
+	enriched_df = enriched_df.orderBy("production_id", "date", "time","region")  # Tri
 	return enriched_df
 
 
