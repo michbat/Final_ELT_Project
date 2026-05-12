@@ -9,7 +9,7 @@ WORKDIR /app
 # Ajouter l'environnement virtuel au PATH du container pour utiliser les packages installés
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copier les fichiers de dépendances (optimisation du cache Docker)
+# Copier les fichiers de dépendances 
 COPY pyproject.toml uv.lock .python-version ./
 
 # Installer les dépendances système nécessaires (libpq pour psycopg, outils de build, OpenJDK 17 pour PySpark)
@@ -27,7 +27,7 @@ RUN apt-get update \
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="$JAVA_HOME/bin:$PATH"
 
-# Créer un environnement virtuel dans l'image en utilisant uv et le lockfile
+# Installer les dépendances Python dans l'environnement virtuel courant à partir du lockfile généré par uv
 RUN uv sync --locked
 
 # Copier les scripts python d'ingestion dans le dossier

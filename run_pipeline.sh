@@ -17,6 +17,7 @@ if ! [[ "$JOUR" =~ ^[0-9]{1,2}$ && "$MOIS" =~ ^[0-9]{1,2}$ && "$ANNEE" =~ ^[0-9]
 fi
 
 # Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)
+# printf '%02d' : formater le nombre pour qu'il ait au moins 2 chiffres
 DATE_SAISIE="${ANNEE}$(printf '%02d' $MOIS)$(printf '%02d' $JOUR)"
 DATE_MIN="20240615"  # 15/06/2024
 DATE_MAX="20240803"  # 03/08/2024
