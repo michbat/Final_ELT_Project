@@ -6,9 +6,9 @@ echo "Transformation couche Silver - Données de production éolienne et météo
 # Affecter les variables d'environnement avec des valeurs par défaut si elles ne sont pas définies
 DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="${DB_PORT:-5432}"
-DB_USER="${DB_USER:-admin}"
+DB_USER="${DB_USER:-}"
 DB_PASSWORD="${DB_PASSWORD:-}"
-DB_NAME="${DB_NAME:-wind_turbine_power}"
+DB_NAME="${DB_NAME:-}"
 
 
 # Vérifier que les variables d'environnement critiques sont définies

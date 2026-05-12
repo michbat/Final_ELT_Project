@@ -64,8 +64,9 @@ erDiagram
         BIGINT turbine_id FK
         BIGINT status_id FK
         NUMERIC energy_produced
-        NUMERIC wind_speed_100m
+        NUMERIC wind_speed
         VARCHAR wind_direction
+        NUMERIC cloud_cover
     }
 
     fact_weather_conditions {
@@ -73,11 +74,10 @@ erDiagram
         DATE date_id FK
         TIME time_id FK
         BIGINT location_id FK
-        NUMERIC temperature_2m
-        NUMERIC pressure_msl
-        NUMERIC precipitation
+        NUMERIC wind_speed
         NUMERIC wind_gust_10m
-        NUMERIC wind_speed_100m
+        NUMERIC temperature_2m
+        NUMERIC cloud_cover
     }
 
 

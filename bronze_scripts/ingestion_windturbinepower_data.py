@@ -89,7 +89,6 @@ def create_bronze_schema_and_table() -> None:
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-                cur.execute("DROP TABLE IF EXISTS bronze.windturbinepower_raw")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS bronze.windturbinepower_raw (
                         production_id BIGINT,
@@ -112,6 +111,7 @@ def create_bronze_schema_and_table() -> None:
                         batch_id VARCHAR(100)
                     )
                 """)
+                cur.execute("TRUNCATE TABLE bronze.windturbinepower_raw")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_windturbinepower_raw_turbine_time ON bronze.windturbinepower_raw(turbine_name, measured_at)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_windturbinepower_raw_location ON bronze.windturbinepower_raw(latitude, longitude)")
                 conn.commit()
@@ -207,9 +207,9 @@ def main(jour, mois, annee):
     logger.info("Démarrage ingestion_windturbinepower_data.py")
     spark = init_spark()
     try:
-        # create_bronze_schema_and_table(reset_table=reset_table)
-        create_bronze_schema_and_table()
         if jour and mois and annee:
+            # create_bronze_schema_and_table(reset_table=reset_table)
+            create_bronze_schema_and_table()
             # Ingestion d'un fichier spécifique
             date_str = f"{annee:04d}{mois:02d}{jour:02d}"
             csv_path = os.path.join(DATASETS_DIR, f"{date_str}_wind_power_data.csv")
@@ -220,14 +220,15 @@ def main(jour, mois, annee):
             ingest_csv_to_bronze(spark, csv_path)
         else:
             # Ingestion de tous les fichiers CSV du dossier datasets/
-            csv_files = sorted(glob.glob(os.path.join(DATASETS_DIR, "*.csv")))
-            logger.info(f"Fichiers à ingérer : {csv_files}")
-            for csv_path in csv_files:
-                try:
-                    ingest_csv_to_bronze(spark, csv_path)
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'ingestion du fichier {csv_path} : {e}")
-            logger.info("Ingestion de tous les fichiers CSV terminée avec succès.")
+            # csv_files = sorted(glob.glob(os.path.join(DATASETS_DIR, "*.csv")))
+            # logger.info(f"Fichiers à ingérer : {csv_files}")
+            # for csv_path in csv_files:
+            #     try:
+            #         ingest_csv_to_bronze(spark, csv_path)
+            #     except Exception as e:
+            #         logger.error(f"Erreur lors de l'ingestion du fichier {csv_path} : {e}")
+            # logger.info("Ingestion de tous les fichiers CSV terminée avec succès.")
+            logger.info("Aucune date spécifique fournie, mais l'ingestion de tous les fichiers est désactivée pour éviter les erreurs. Veuillez fournir une date avec --jour, --mois et --annee (entre le 15/06/2024 et le 03/08/2024) pour ingérer un fichier spécifique.")
     except Exception as e:
         logger.error(f"Erreur critique : {e}", exc_info=True)
         sys.exit(1)

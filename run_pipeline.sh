@@ -28,12 +28,12 @@ if [[ "$DATE_SAISIE" -lt "$DATE_MIN" || "$DATE_SAISIE" -gt "$DATE_MAX" ]]; then
 fi
 
 echo "[1/3] Lancement de bronze pour la date ${JOUR}/${MOIS}/${ANNEE}..."
-INGEST_JOUR="$JOUR" INGEST_MOIS="$MOIS" INGEST_ANNEE="$ANNEE" docker compose up bronze
+docker compose run --rm bronze "$JOUR" "$MOIS" "$ANNEE"
 
 echo "[2/3] Lancement de silver..."
-docker compose up silver
+docker compose run --rm silver
 
 echo "[3/3] Lancement de gold..."
-docker compose up gold
+docker compose run --rm gold
 
 echo "Pipeline terminé avec succès."

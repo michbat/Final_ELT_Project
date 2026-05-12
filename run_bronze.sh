@@ -11,23 +11,23 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 DB_NAME="${DB_NAME:-wind_turbine_power}"
 DATASETS_DIR="${DATASETS_DIR:-/app/datasets}"
 
-# Date pour l'ingestion : accepter les arguments de la ligne de commande ou utiliser les variables d'environnement/défaut
-# Usage: ./run_bronze.sh [jour] [mois] [annee]
-# Exemple: ./run_bronze.sh 16 6 2024
-if [ $# -eq 3 ]; then
-    INGEST_JOUR="$1"
-    INGEST_MOIS="$2"
-    INGEST_ANNEE="$3"
-    echo "Arguments de ligne de commande détectés: ${INGEST_JOUR}/${INGEST_MOIS}/${INGEST_ANNEE}"
-elif [ $# -eq 0 ]; then
-    INGEST_JOUR="${INGEST_JOUR:-15}"
-    INGEST_MOIS="${INGEST_MOIS:-6}"
-    INGEST_ANNEE="${INGEST_ANNEE:-2024}"
-else
-    echo "ERREUR: Utilisation incorrecte. Fournir 0 ou 3 arguments." >&2
-    echo "Usage: $0 [jour] [mois] [annee]" >&2
-    echo "Exemple: $0 16 6 2024" >&2
-    exit 1
+# Exiger exactement 3 arguments pour la date
+if [[ $# -ne 3 ]]; then
+  echo "ERREUR: Utilisation incorrecte. Fournir exactement 3 arguments." >&2
+  echo "Usage: $0 [jour] [mois] [annee]" >&2
+  echo "Exemple: $0 16 6 2024" >&2
+  exit 1
+fi
+
+INGEST_JOUR="$1"
+INGEST_MOIS="$2"
+INGEST_ANNEE="$3"
+echo "Arguments de ligne de commande détectés: ${INGEST_JOUR}/${INGEST_MOIS}/${INGEST_ANNEE}"
+
+# Validation du format des arguments
+if ! [[ "$INGEST_JOUR" =~ ^[0-9]{1,2}$ && "$INGEST_MOIS" =~ ^[0-9]{1,2}$ && "$INGEST_ANNEE" =~ ^[0-9]{4}$ ]]; then
+  echo "Erreur: format invalide. Attendu: jour(1-2 chiffres) mois(1-2 chiffres) annee(4 chiffres)." >&2
+  exit 1
 fi
 
 # Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)

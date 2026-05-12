@@ -96,6 +96,7 @@ OPENMETEO_PARAMS = {
 }
 
 # Schéma Spark pour les données météo
+# Ce schéma sert à garantir que les données sont correctement typées lors de la création du DataFrame Spark
 WEATHER_SCHEMA = StructType([
     StructField("date", StringType(), False),
     StructField("time", StringType(), False),
@@ -108,6 +109,7 @@ WEATHER_SCHEMA = StructType([
     StructField("cloud_cover", FloatType(), True)
 ])
 
+# jdbc (Java Database Connectivity) est un protocole de connexion à une base de données relationnelle, ici PostgreSQL
 JDBC_URL = f"jdbc:postgresql://{DB_HOST}:{DB_PORT}/{DB_NAME}"
 JDBC_PROPS = {
     "user": DB_USER,
@@ -139,7 +141,6 @@ def create_weather_table() -> None:
         ) as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE SCHEMA IF NOT EXISTS bronze")
-                cur.execute("DROP TABLE IF EXISTS bronze.weatherforecastapi_raw")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS bronze.weatherforecastapi_raw (
                         date DATE NOT NULL,
@@ -156,6 +157,7 @@ def create_weather_table() -> None:
                         UNIQUE(region, date, time)
                     )
                 """)
+                cur.execute("TRUNCATE TABLE bronze.weatherforecastapi_raw")
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_weather_region_datetime 
                     ON bronze.weatherforecastapi_raw(region, date, time)
@@ -399,6 +401,7 @@ def ingest_weather_to_bronze(spark: SparkSession, target_date: str) -> int:
 @click.option('--jour', type=int, required=True, help='Jour à ingérer (ex: 15)')
 @click.option('--mois', type=int, required=True, help='Mois à ingérer (ex: 6)')
 @click.option('--annee', type=int, required=True, help='Année à ingérer (ex: 2024)')
+
 def main(jour, mois, annee):
     """
     Point d'entrée principal du script.
@@ -410,8 +413,11 @@ def main(jour, mois, annee):
     
     # Construction de la date
     target_date = f"{annee:04d}-{mois:02d}-{jour:02d}"
+    if target_date < "2024-06-15" or target_date > "2024-08-03":
+        logger.error("Date invalide. Veuillez fournir une date entre le 15/06/2024 et le 03/08/2024.")
+        sys.exit(1)
+        
     logger.info(f"Date cible : {target_date}")
-    
     spark = init_spark()
     
     try:
