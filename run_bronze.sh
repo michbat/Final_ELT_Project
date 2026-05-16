@@ -30,8 +30,9 @@ if ! [[ "$INGEST_JOUR" =~ ^[0-9]{1,2}$ && "$INGEST_MOIS" =~ ^[0-9]{1,2}$ && "$IN
   exit 1
 fi
 
-# Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)
-DATE_SAISIE="${INGEST_ANNEE}$(printf '%02d' $INGEST_MOIS)$(printf '%02d' $INGEST_JOUR)"
+ # Validation de la plage de dates (15/06/2024 à 03/08/2024 inclus)
+ # $((10#$VAR)) : permet de traiter les nombres avec des zéros initiaux comme des nombres décimaux, évitant ainsi les problèmes d'interprétation en octal
+DATE_SAISIE="${INGEST_ANNEE}$(printf '%02d' $((10#$INGEST_MOIS)))$(printf '%02d' $((10#$INGEST_JOUR)))"
 DATE_MIN="20240615"  # 15/06/2024
 DATE_MAX="20240803"  # 03/08/2024
 

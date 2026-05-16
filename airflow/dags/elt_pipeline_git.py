@@ -38,7 +38,7 @@ def _allowed_dates(start: date, end: date) -> list[str]:
 	values: list[str] = []
 	current = start
 	while current <= end:
-		values.append(current.isoformat())
+		values.append(current.isoformat()) # isoformat() : format de date standard ISO 8601 (YYYY-MM-DD)
 		current += timedelta(days=1)
 	return values
 
